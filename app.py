@@ -48,7 +48,7 @@ if st.button("🔍 പ്രൂഫ് പരിശോധിക്കുക", typ
                 """
 
                 response = client.models.generate_content(
-                    model='gemini-1.5-flash',
+                    model='gemini-3.8-flash',
                     contents=[prompt, img_manuscript, img_layout]
                 )
 
