@@ -1,6 +1,6 @@
 import streamlit as st
 import streamlit.components.v1 as components
-from google import genai
+import google.generativeai as genai
 from PIL import Image, ImageDraw
 import pdf2image
 import time
@@ -11,6 +11,19 @@ from reportlab.pdfgen import canvas
 st.set_page_config(page_title="Malayalam Proofreader & Publishing Suite", page_icon="📝", layout="wide")
 
 st.title("📝 മലയാളം പ്രൂഫ് റീഡർ & പബ്ലിഷിംഗ് സ്യൂട്ട്")
+
+# ==========================================
+# API KEY CONFIGURATION (From Secrets or Direct)
+# ==========================================
+api_key = st.secrets.get("GEMINI_API_KEY", None)
+
+if not api_key:
+    api_key = st.sidebar.text_input("Gemini API Key നൽകുക:", type="password")
+
+if api_key:
+    genai.configure(api_key=api_key)
+else:
+    st.error("⚠️ ദയവായി Streamlit Secrets-ൽ 'GEMINI_API_KEY' ചേർക്കുക അല്ലെങ്കിൽ Sidebar-ൽ API Key നൽകുക!")
 
 # ==========================================
 # VOICE TYPING COMPONENT
@@ -69,8 +82,6 @@ app_mode = st.sidebar.radio(
     ]
 )
 
-API_KEY = "AQ.Ab8RN6JuNvwjcA6U90BwPmzIHkBhuCrK7j_vwZUz94zKIfNo2A"
-
 def load_file_as_image(uploaded_file, camera_file=None):
     if camera_file is not None:
         return Image.open(camera_file)
@@ -98,6 +109,19 @@ def generate_pdf_bytes(text_content):
     buffer.seek(0)
     return buffer
 
+def generate_ai_response(contents):
+    models = ['gemini-1.5-flash', 'gemini-1.5-pro']
+    for model_name in models:
+        try:
+            model = genai.GenerativeModel(model_name)
+            response = model.generate_content(contents)
+            if response and response.text:
+                return response.text
+        except Exception as e:
+            time.sleep(1)
+            last_err = e
+    raise last_err
+
 # ==========================================
 # FEATURE 1: MANUSCRIPT VS LAYOUT
 # ==========================================
@@ -110,20 +134,22 @@ if app_mode == "1. ഇമേജ്/PDF പ്രൂഫ് റീഡിംഗ് 
         l_file = st.file_uploader("ലേഔട്ട് പേജ് നൽകുക", type=["jpg", "png", "pdf"], key="l_f")
 
     if st.button("🔍 പരിശോധിക്കുക", type="primary"):
-        img_m = load_file_as_image(m_file)
-        img_l = load_file_as_image(l_file)
-        if not img_m or not img_l:
-            st.warning("രണ്ട് ഫയലുകളും നൽകുക!")
+        if not api_key:
+            st.error("API Key സജ്ജമാക്കിയിട്ടില്ല!")
         else:
-            with st.spinner("AI പരിശോധിക്കുന്നു..."):
-                try:
-                    client = genai.Client(api_key=API_KEY)
-                    prompt = "Compare Image 2 against Image 1. Provide proofreading errors and layout design flaws in Malayalam."
-                    res = client.models.generate_content(model='gemini-2.0-flash', contents=[img_m, img_l, prompt])
-                    st.markdown(res.text)
-                    st.download_button("📥 PDF ആയി ഡൗൺലോഡ് ചെയ്യുക", generate_pdf_bytes(res.text), "report.pdf", "application/pdf")
-                except Exception as e:
-                    st.error(f"Error: {e}")
+            img_m = load_file_as_image(m_file)
+            img_l = load_file_as_image(l_file)
+            if not img_m or not img_l:
+                st.warning("രണ്ട് ഫയലുകളും നൽകുക!")
+            else:
+                with st.spinner("AI പരിശോധിക്കുന്നു..."):
+                    try:
+                        prompt = "Compare Image 2 against Image 1. Provide proofreading errors and layout design flaws in Malayalam."
+                        res_text = generate_ai_response([img_m, img_l, prompt])
+                        st.markdown(res_text)
+                        st.download_button("📥 PDF ആയി ഡൗൺലോഡ് ചെയ്യുക", generate_pdf_bytes(res_text), "report.pdf", "application/pdf")
+                    except Exception as e:
+                        st.error(f"Error: {e}")
 
 # ==========================================
 # FEATURE 2: OCR & VISUAL ERROR HIGHLIGHTING
@@ -133,26 +159,27 @@ elif app_mode == "2. OCR & ഇമേജ് ഹൈലൈറ്റിംഗ് (Vi
     ocr_f = st.file_uploader("ചിത്രം / PDF അപ്‌ലോഡ് ചെയ്യുക", type=["jpg", "png", "pdf"])
 
     if st.button("🔍 വായിച്ച് തിരുത്തുക", type="primary"):
-        img_in = load_file_as_image(ocr_f)
-        if not img_in:
-            st.warning("ഫയൽ നൽകുക!")
+        if not api_key:
+            st.error("API Key സജ്ജമാക്കിയിട്ടില്ല!")
         else:
-            with st.spinner("ടെക്സ്റ്റ് തിരുത്തുന്നു..."):
-                try:
-                    client = genai.Client(api_key=API_KEY)
-                    prompt = "Extract all Malayalam text, correct spelling/grammar, and return ONLY the corrected text."
-                    res = client.models.generate_content(model='gemini-2.0-flash', contents=[img_in, prompt])
+            img_in = load_file_as_image(ocr_f)
+            if not img_in:
+                st.warning("ഫയൽ നൽകുക!")
+            else:
+                with st.spinner("ടെക്സ്റ്റ് തിരുത്തുന്നു..."):
+                    try:
+                        prompt = "Extract all Malayalam text, correct spelling/grammar, and return ONLY the corrected text."
+                        res_text = generate_ai_response([img_in, prompt])
 
-                    st.success("തിരുത്തിയ ടെക്സ്റ്റ്:")
-                    st.code(res.text, language="text")
+                        st.success("തിരുത്തിയ ടെക്സ്റ്റ്:")
+                        st.code(res_text, language="text")
 
-                    # Highlight visual boundary check demonstration
-                    draw = ImageDraw.Draw(img_in)
-                    w, h = img_in.size
-                    draw.rectangle([10, 10, w-10, h-10], outline="red", width=5)
-                    st.image(img_in, caption="ലേഔട്ട് മാർജിൻ ബോർഡർ മാർക്കിംഗ് (Visual Check)", use_container_width=True)
-                except Exception as e:
-                    st.error(f"Error: {e}")
+                        draw = ImageDraw.Draw(img_in)
+                        w, h = img_in.size
+                        draw.rectangle([10, 10, w-10, h-10], outline="red", width=5)
+                        st.image(img_in, caption="ലേഔട്ട് മാർജിൻ ബോർഡർ മാർക്കിംഗ് (Visual Check)", use_container_width=True)
+                    except Exception as e:
+                        st.error(f"Error: {e}")
 
 # ==========================================
 # FEATURE 3: AUTO-CORRECT & TONE CONVERTER
@@ -163,15 +190,16 @@ elif app_mode == "3. ടെക്സ്റ്റ് ഓട്ടോ-കറക്
     tone = st.selectbox("ഏത് ശൈലിയിലേക്ക് മാറ്റണം?", ["സാധാരണ ഗ്രന്ഥ ഭാഷ (Standard Formal)", "വർത്തമാന പത്ര ശൈലി (Journalistic)", "സംഭാഷണ ശൈലി (Conversational)"])
 
     if st.button("✨ ശൈലി മാറ്റി തിരുത്തുക", type="primary"):
-        if not u_text.strip():
+        if not api_key:
+            st.error("API Key സജ്ജമാക്കിയിട്ടില്ല!")
+        elif not u_text.strip():
             st.warning("ടെക്സ്റ്റ് നൽകുക!")
         else:
             with st.spinner("മാറ്റം വരുത്തുന്നു..."):
                 try:
-                    client = genai.Client(api_key=API_KEY)
                     prompt = f"Correct Malayalam text and adapt it to tone/style: {tone}.\nText: {u_text}"
-                    res = client.models.generate_content(model='gemini-2.0-flash', contents=[prompt])
-                    st.markdown(res.text)
+                    res_text = generate_ai_response([prompt])
+                    st.markdown(res_text)
                 except Exception as e:
                     st.error(f"Error: {e}")
 
@@ -183,15 +211,16 @@ elif app_mode == "4. നിഘണ്ടു & പര്യായപദങ്ങ�
     word = st.text_input("തിരയേണ്ട മലയാളം വാക്ക്:")
 
     if st.button("🔍 തിരയുക", type="primary"):
-        if not word.strip():
+        if not api_key:
+            st.error("API Key സജ്ജമാക്കിയിട്ടില്ല!")
+        elif not word.strip():
             st.warning("വാക്ക് നൽകുക!")
         else:
             with st.spinner("അർത്ഥം കണ്ടെത്തുന്നു..."):
                 try:
-                    client = genai.Client(api_key=API_KEY)
                     prompt = f"Provide Malayalam meaning, 3-4 synonyms (പര്യായപദങ്ങൾ), and antonym (എതിർപദം) for word: '{word}'"
-                    res = client.models.generate_content(model='gemini-2.0-flash', contents=[prompt])
-                    st.markdown(res.text)
+                    res_text = generate_ai_response([prompt])
+                    st.markdown(res_text)
                 except Exception as e:
                     st.error(f"Error: {e}")
 
@@ -205,7 +234,7 @@ else:
     if txt_input.strip():
         words = len(txt_input.split())
         chars = len(txt_input)
-        read_time = round(words / 130, 2) # Average Malayalam reading speed
+        read_time = round(words / 130, 2)
 
         c1, c2, c3 = st.columns(3)
         c1.metric("ആകെ വാക്കുകൾ", words)
