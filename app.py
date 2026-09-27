@@ -110,7 +110,7 @@ def generate_pdf_bytes(text_content):
     return buffer
 
 def generate_ai_response(contents):
-    models = ['gemini-1.5-flash', 'gemini-2.0-flash']
+    models = ['gemini-2.0-flash', 'gemini-2.0-flash']
     for model_name in models:
         try:
             model = genai.GenerativeModel(model_name)
