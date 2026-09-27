@@ -1,6 +1,5 @@
 streamlit
-google-generativeai
+google-genai
 pillow
 pdf2image
-poppler-utils
 reportlab
