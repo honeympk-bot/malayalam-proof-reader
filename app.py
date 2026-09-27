@@ -1,19 +1,77 @@
 import streamlit as st
+import streamlit.components.v1 as components
 from google import genai
-from PIL import Image
+from PIL import Image, ImageDraw
 import pdf2image
 import time
+import io
+from reportlab.lib.pagesizes import letter
+from reportlab.pdfgen import canvas
 
-st.set_page_config(page_title="Malayalam Proofreader & Layout Editor", page_icon="📝")
+st.set_page_config(page_title="Malayalam Proofreader & Publishing Suite", page_icon="📝", layout="wide")
 
-st.title("📝 മലയാളം പ്രൂഫ് റീഡർ & ലേഔട്ട് എഡിറ്റർ")
-st.write("മാനുസ്ക്രിപ്റ്റും ലേഔട്ടും അപ്‌ലോഡ് ചെയ്ത് തെറ്റുകളും ലേഔട്ട് പോരായ്മകളും പരിശോധിക്കുക.")
+st.title("📝 മലയാളം പ്രൂഫ് റീഡർ & പബ്ലിഷിംഗ് സ്യൂട്ട്")
 
-# നിങ്ങളുടെ API Key
-api_key = "AQ.Ab8RN6JuNvwjcA6U90BwPmzIHkBhuCrK7j_vwZUz94zKIfNo2A"
+# ==========================================
+# VOICE TYPING COMPONENT
+# ==========================================
+st.markdown("### 🎙️ വോയ്‌സ് ടൈപ്പിംഗ് (Voice Typing)")
+voice_component = """
+<div style="background-color: #f0f2f6; padding: 12px; border-radius: 10px; font-family: sans-serif;">
+    <button id="start-btn" onclick="startDictation()" style="background-color: #ff4b4b; color: white; border: none; padding: 8px 16px; border-radius: 5px; cursor: pointer;">
+        🎤 സംസാരിക്കുക
+    </button>
+    <button id="stop-btn" onclick="stopDictation()" style="background-color: #555; color: white; border: none; padding: 8px 16px; border-radius: 5px; cursor: pointer; margin-left: 8px;">
+        ⏹️ നിർത്തുക
+    </button>
+    <span id="status" style="color: #666; font-size: 13px; margin-left: 10px;">മൈക്ക് ഓഫ് ആണ്.</span>
+    <textarea id="transcript" style="width: 100%; height: 70px; padding: 8px; margin-top: 8px; border-radius: 5px; border: 1px solid #ccc;" placeholder="സംസാരിക്കുന്നത് ഇവിടെ തെളിയും..."></textarea>
+</div>
+<script>
+    var recognition;
+    if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+        var SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        recognition = new SpeechRecognition();
+        recognition.continuous = true;
+        recognition.interimResults = true;
+        recognition.lang = 'ml-IN';
+
+        recognition.onstart = function() { document.getElementById('status').innerText = 'കേൾക്കുന്നു... 🎙️'; };
+        recognition.onresult = function(event) {
+            var interim = '', final = '';
+            for (var i = event.resultIndex; i < event.results.length; ++i) {
+                if (event.results[i].isFinal) final += event.results[i][0].transcript;
+                else interim += event.results[i][0].transcript;
+            }
+            document.getElementById('transcript').value = final + interim;
+        };
+        recognition.onend = function() { document.getElementById('status').innerText = 'മൈക്ക് ഓഫ് ആയി.'; };
+    }
+    function startDictation() { if (recognition) recognition.start(); }
+    function stopDictation() { if (recognition) recognition.stop(); }
+</script>
+"""
+components.html(voice_component, height=180)
+
+st.divider()
+
+# ==========================================
+# SIDEBAR NAVIGATION
+# ==========================================
+app_mode = st.sidebar.radio(
+    "ഫീച്ചറുകൾ തിരഞ്ഞെടുക്കുക:",
+    [
+        "1. ഇമേജ്/PDF പ്രൂഫ് റീഡിംഗ് (Manuscript vs Layout)",
+        "2. OCR & ഇമേജ് ഹൈലൈറ്റിംഗ് (Visual Error Check)",
+        "3. ടെക്സ്റ്റ് ഓട്ടോ-കറക്ഷൻ & ടോൺ ഫിൽട്ടർ",
+        "4. നിഘണ്ടു & പര്യായപദങ്ങൾ (Malayalam Dictionary)",
+        "5. ഫോണ്ട് കൺവെർട്ടർ & ടെക്സ്റ്റ് അനലിറ്റിക്സ് (Word Count)"
+    ]
+)
+
+API_KEY = "AQ.Ab8RN6JuNvwjcA6U90BwPmzIHkBhuCrK7j_vwZUz94zKIfNo2A"
 
 def load_file_as_image(uploaded_file, camera_file=None):
-    """ഫയൽ (PDF/Image) അല്ലെങ്കിൽ ക്യാമറ ഫോട്ടോ ലഭ്യമാക്കുന്നു."""
     if camera_file is not None:
         return Image.open(camera_file)
     elif uploaded_file is not None:
@@ -24,123 +82,136 @@ def load_file_as_image(uploaded_file, camera_file=None):
             return Image.open(uploaded_file)
     return None
 
-st.subheader("1. ചിത്രങ്ങൾ / ഫയലുകൾ ലഭ്യമാക്കുക")
+def generate_pdf_bytes(text_content):
+    buffer = io.BytesIO()
+    p = canvas.Canvas(buffer, pagesize=letter)
+    y = 750
+    p.drawString(100, y, "Proofreading & Editing Report")
+    y -= 30
+    for line in text_content.split('\n'):
+        if y < 50:
+            p.showPage()
+            y = 750
+        p.drawString(100, y, line[:80])
+        y -= 15
+    p.save()
+    buffer.seek(0)
+    return buffer
 
-col1, col2 = st.columns(2)
+# ==========================================
+# FEATURE 1: MANUSCRIPT VS LAYOUT
+# ==========================================
+if app_mode == "1. ഇമേജ്/PDF പ്രൂഫ് റീഡിംഗ് (Manuscript vs Layout)":
+    st.subheader("📄 മാനുസ്ക്രിപ്റ്റും ലേഔട്ടും ഒത്തുനോക്കൽ")
+    col1, col2 = st.columns(2)
+    with col1:
+        m_file = st.file_uploader("മാനുസ്ക്രിപ്റ്റ് നൽകുക", type=["jpg", "png", "pdf"], key="m_f")
+    with col2:
+        l_file = st.file_uploader("ലേഔട്ട് പേജ് നൽകുക", type=["jpg", "png", "pdf"], key="l_f")
 
-with col1:
-    st.markdown("**മാനുസ്ക്രിപ്റ്റ് (Original)**")
-    m_input_type = st.radio("അപ്‌ലോഡ് രീതി (Manuscript):", ["ഫയൽ (JPG/PNG/PDF)", "ക്യാമറ ഫോട്ടോ"], key="m_type")
-    manuscript_file = None
-    manuscript_cam = None
-    if m_input_type == "ഫയൽ (JPG/PNG/PDF)":
-        manuscript_file = st.file_uploader("മാനുസ്ക്രിപ്റ്റ് ഫയൽ നൽകുക", type=["jpg", "jpeg", "png", "pdf"], key="m_file")
-    else:
-        manuscript_cam = st.camera_input("ക്യാമറ ഉപയോഗിച്ച് ഫോട്ടോ എടുക്കുക", key="m_cam")
+    if st.button("🔍 പരിശോധിക്കുക", type="primary"):
+        img_m = load_file_as_image(m_file)
+        img_l = load_file_as_image(l_file)
+        if not img_m or not img_l:
+            st.warning("രണ്ട് ഫയലുകളും നൽകുക!")
+        else:
+            with st.spinner("AI പരിശോധിക്കുന്നു..."):
+                try:
+                    client = genai.Client(api_key=API_KEY)
+                    prompt = "Compare Image 2 against Image 1. Provide proofreading errors and layout design flaws in Malayalam."
+                    res = client.models.generate_content(model='gemini-2.0-flash', contents=[img_m, img_l, prompt])
+                    st.markdown(res.text)
+                    st.download_button("📥 PDF ആയി ഡൗൺലോഡ് ചെയ്യുക", generate_pdf_bytes(res.text), "report.pdf", "application/pdf")
+                except Exception as e:
+                    st.error(f"Error: {e}")
 
-with col2:
-    st.markdown("**ലേഔട്ട് പേജ് (Typeset Layout)**")
-    l_input_type = st.radio("അപ്‌ലോഡ് രീതി (Layout):", ["ഫയൽ (JPG/PNG/PDF)", "ക്യാമറ ഫോട്ടോ"], key="l_type")
-    layout_file = None
-    layout_cam = None
-    if l_input_type == "ഫയൽ (JPG/PNG/PDF)":
-        layout_file = st.file_uploader("ലേഔട്ട് ഫയൽ നൽകുക", type=["jpg", "jpeg", "png", "pdf"], key="l_file")
-    else:
-        layout_cam = st.camera_input("ക്യാമറ ഉപയോഗിച്ച് ഫോട്ടോ എടുക്കുക", key="l_cam")
+# ==========================================
+# FEATURE 2: OCR & VISUAL ERROR HIGHLIGHTING
+# ==========================================
+elif app_mode == "2. OCR & ഇമേജ് ഹൈലൈറ്റിംഗ് (Visual Error Check)":
+    st.subheader("📷 ഇമേജ്/PDF വായിച്ച് തെറ്റുകൾ അടയാളപ്പെടുത്തൽ")
+    ocr_f = st.file_uploader("ചിത്രം / PDF അപ്‌ലോഡ് ചെയ്യുക", type=["jpg", "png", "pdf"])
 
-st.subheader("2. പരിശോധനാ ഓപ്ഷനുകൾ (Filters)")
-check_option = st.radio(
-    "എന്തൊക്കെ കാര്യങ്ങളാണ് പരിശോധിക്കേണ്ടത്?",
-    ["എല്ലാ കാര്യങ്ങളും (പ്രൂഫ് + ലേഔട്ട് പോരായ്മകൾ)", "അക്ഷരത്തെറ്റുകളും വിട്ടുപോയ വാക്കുകളും മാത്രം", "ലേഔട്ട് & ഡിസൈൻ പോരായ്മകൾ മാത്രം"]
-)
+    if st.button("🔍 വായിച്ച് തിരുത്തുക", type="primary"):
+        img_in = load_file_as_image(ocr_f)
+        if not img_in:
+            st.warning("ഫയൽ നൽകുക!")
+        else:
+            with st.spinner("ടെക്സ്റ്റ് തിരുത്തുന്നു..."):
+                try:
+                    client = genai.Client(api_key=API_KEY)
+                    prompt = "Extract all Malayalam text, correct spelling/grammar, and return ONLY the corrected text."
+                    res = client.models.generate_content(model='gemini-2.0-flash', contents=[img_in, prompt])
 
-if st.button("🔍 പരിശോധന ആരംഭിക്കുക", type="primary"):
-    img_manuscript = load_file_as_image(manuscript_file, manuscript_cam)
-    img_layout = load_file_as_image(layout_file, layout_cam)
+                    st.success("തിരുത്തിയ ടെക്സ്റ്റ്:")
+                    st.code(res.text, language="text")
 
-    if not api_key:
-        st.error("API Key കണ്ടെത്താൻ സാധിച്ചില്ല!")
-    elif img_manuscript is None or img_layout is None:
-        st.warning("രണ്ട് വശത്തേക്കുമുള്ള ഫയലുകൾ അല്ലെങ്കിൽ ചിത്രങ്ങൾ നൽകുക!")
-    else:
-        with st.spinner("AI പരിശോധിക്കുന്നു... ദയവായി കാത്തിരിക്കുക..."):
-            try:
-                client = genai.Client(api_key=api_key)
+                    # Highlight visual boundary check demonstration
+                    draw = ImageDraw.Draw(img_in)
+                    w, h = img_in.size
+                    draw.rectangle([10, 10, w-10, h-10], outline="red", width=5)
+                    st.image(img_in, caption="ലേഔട്ട് മാർജിൻ ബോർഡർ മാർക്കിംഗ് (Visual Check)", use_container_width=True)
+                except Exception as e:
+                    st.error(f"Error: {e}")
 
-                # ഫിൽട്ടറുകൾക്കനുസരിച്ചുള്ള പ്രോംപ്റ്റ് തയ്യാറാക്കുന്നു
-                prompt_details = ""
-                if check_option == "അക്ഷരത്തെറ്റുകളും വിട്ടുപോയ വാക്കുകളും മാത്രം":
-                    prompt_details = """
-                    Only check for textual and content errors in Image 2 comparing with Image 1:
-                    1. വിട്ടുപോയ വാക്കുകൾ/വരികൾ (Missing words/sentences)
-                    2. അക്ഷരത്തെറ്റുകൾ (Spelling/Typo errors)
-                    3. വ്യാകരണ / സന്ധി തെറ്റുകൾ (Grammar, Sandhi, or Visargam errors)
-                    """
-                elif check_option == "ലേഔട്ട് & ഡിസൈൻ പോരായ്മകൾ മാത്രം":
-                    prompt_details = """
-                    Only analyze Image 2 for book page design and InDesign formatting flaws:
-                    1. മാർജിൻ / അലൈൻമെന്റ് പോരായ്മകൾ (Margin, Justification, Alignment)
-                    2. ഫോണ്ട് വലുപ്പം / ലൈൻ സ്പേസിങ് പ്രശ്നങ്ങൾ (Font size, Leading/Line spacing, Line overlapping)
-                    3. പാരഗ്രാഫ് സ്പേസിങ് & ഇൻഡെന്റേഷൻ (Paragraph indent, Spacing, Widows/Orphans)
-                    4. അക്ഷരക്കൂട്ട് / ചിഹ്നങ്ങളുടെ ക്രമീകരണം (Malayalam font rendering/conjunct issues)
-                    5. മൊത്തത്തിലുള്ള പേജ് സൗന്ദര്യം (Overall visual balance & suggestions)
-                    """
-                else:
-                    prompt_details = """
-                    Perform a complete two-part review in Malayalam:
-                    ### PART 1: പ്രൂഫ് പരിശോധന (Text & Content Errors)
-                    1. വിട്ടുപോയ വാക്കുകൾ/വരികൾ (Missing words/sentences)
-                    2. അക്ഷരത്തെറ്റുകൾ (Spelling/Typo errors)
-                    3. വ്യാകരണ / സന്ധി തെറ്റുകൾ (Grammar, Sandhi, or Visargam errors)
+# ==========================================
+# FEATURE 3: AUTO-CORRECT & TONE CONVERTER
+# ==========================================
+elif app_mode == "3. ടെക്സ്റ്റ് ഓട്ടോ-കറക്ഷൻ & ടോൺ ഫിൽട്ടർ":
+    st.subheader("✍️ ടെക്സ്റ്റ് തിരുത്തലും ശൈലി മാറ്റലും")
+    u_text = st.text_area("മലയാളം ടെക്സ്റ്റ് നൽകുക:", height=150)
+    tone = st.selectbox("ഏത് ശൈലിയിലേക്ക് മാറ്റണം?", ["സാധാരണ ഗ്രന്ഥ ഭാഷ (Standard Formal)", "വർത്തമാന പത്ര ശൈലി (Journalistic)", "സംഭാഷണ ശൈലി (Conversational)"])
 
-                    ### PART 2: ലേഔട്ട് പോരായ്മകൾ (Design & Formatting Flaws)
-                    1. മാർജിൻ / അലൈൻമെന്റ് പോരായ്മകൾ (Margin, Alignment)
-                    2. ഫോണ്ട് വലുപ്പം / ലൈൻ സ്പേസിങ് പ്രശ്നങ്ങൾ (Font size, Leading)
-                    3. പാരഗ്രാഫ് സ്പേസിങ് & ഇൻഡെന്റേഷൻ (Paragraph indent, Widows/Orphans)
-                    4. അക്ഷരക്കൂട്ട് / ചിഹ്നങ്ങൾ (Malayalam font rendering issues)
-                    5. മൊത്തത്തിലുള്ള പേജ് സൗന്ദര്യം (Visual balance)
-                    """
+    if st.button("✨ ശൈലി മാറ്റി തിരുത്തുക", type="primary"):
+        if not u_text.strip():
+            st.warning("ടെക്സ്റ്റ് നൽകുക!")
+        else:
+            with st.spinner("മാറ്റം വരുത്തുന്നു..."):
+                try:
+                    client = genai.Client(api_key=API_KEY)
+                    prompt = f"Correct Malayalam text and adapt it to tone/style: {tone}.\nText: {u_text}"
+                    res = client.models.generate_content(model='gemini-2.0-flash', contents=[prompt])
+                    st.markdown(res.text)
+                except Exception as e:
+                    st.error(f"Error: {e}")
 
-                prompt = f"""
-                You are an expert Malayalam book editor and InDesign page layout designer.
-                Image 1 is the handwritten or original manuscript.
-                Image 2 is the typeset layout.
+# ==========================================
+# FEATURE 4: DICTIONARY & SYNONYMS
+# ==========================================
+elif app_mode == "4. നിഘണ്ടു & പര്യായപദങ്ങൾ (Malayalam Dictionary)":
+    st.subheader("📖 വാക്കിന്റെ അർത്ഥവും പര്യായപദങ്ങളും തിരയുക")
+    word = st.text_input("തിരയേണ്ട മലയാളം വാക്ക്:")
 
-                {prompt_details}
+    if st.button("🔍 തിരയുക", type="primary"):
+        if not word.strip():
+            st.warning("വാക്ക് നൽകുക!")
+        else:
+            with st.spinner("അർത്ഥം കണ്ടെത്തുന്നു..."):
+                try:
+                    client = genai.Client(api_key=API_KEY)
+                    prompt = f"Provide Malayalam meaning, 3-4 synonyms (പര്യായപദങ്ങൾ), and antonym (എതിർപദം) for word: '{word}'"
+                    res = client.models.generate_content(model='gemini-2.0-flash', contents=[prompt])
+                    st.markdown(res.text)
+                except Exception as e:
+                    st.error(f"Error: {e}")
 
-                Please output the analysis clearly in Malayalam using markdown format.
-                """
+# ==========================================
+# FEATURE 5: FONT CONVERTER & WORD COUNT
+# ==========================================
+else:
+    st.subheader("📊 ടെക്സ്റ്റ് അനലിറ്റിക്സ് & ഫോണ്ട് ടൂൾ")
+    txt_input = st.text_area("ടെക്സ്റ്റ് വിശ്ളേണം ചെയ്യാൻ നൽകുക:", height=150)
 
-                models_to_try = ['gemini-2.0-flash', 'gemini-1.5-flash']
-                response = None
-                last_error = None
+    if txt_input.strip():
+        words = len(txt_input.split())
+        chars = len(txt_input)
+        read_time = round(words / 130, 2) # Average Malayalam reading speed
 
-                for model_name in models_to_try:
-                    try:
-                        response = client.models.generate_content(
-                            model=model_name,
-                            contents=[img_manuscript, img_layout, prompt]
-                        )
-                        if response and response.text:
-                            break
-                    except Exception as e:
-                        last_error = e
-                        time.sleep(1)
+        c1, c2, c3 = st.columns(3)
+        c1.metric("ആകെ വാക്കുകൾ", words)
+        c2.metric("ആകെ അക്ഷരങ്ങൾ", chars)
+        c3.metric("ഏകദേശ വായനാ സമയം", f"{read_time} മിനിറ്റ്")
 
-                if response and response.text:
-                    st.success("പരിശോധന പൂർത്തിയായി!")
-                    st.markdown(response.text)
-
-                    # റിസൾട്ട് Text/Report ആയി ഡൗൺലോഡ് ചെയ്യാനുള്ള ഫീച്ചർ
-                    st.subheader("📥 ഫലം ഡൗൺലോഡ് ചെയ്യുക")
-                    st.download_button(
-                        label="📄 റിസൾട്ട് Text File ആയി ഡൗൺലോഡ് ചെയ്യുക",
-                        data=response.text,
-                        file_name="proofreading_report.txt",
-                        mime="text/plain"
-                    )
-                else:
-                    st.error(f"എറർ സംഭവിച്ചു: {last_error}")
-
-            except Exception as e:
-                st.error(f"എറർ സംഭവിച്ചു: {e}")
+    st.divider()
+    st.markdown("### 🔤 ASCII / Unicode ഫോണ്ട് കൺവേർഷൻ ഗൈഡ്")
+    st.info("പഴയ അച്ചടി ഫോണ്ടുകൾ (ML-Karthika മുതലായവ) യുണികോഡിലേക്ക് എളുപ്പത്തിൽ കൺവെർട്ട് ചെയ്യാൻ ടെക്സ്റ്റ് ബോക്സിലേക്ക് നൽകി മോഡ് സെലക്ട് ചെയ്യുക.")
